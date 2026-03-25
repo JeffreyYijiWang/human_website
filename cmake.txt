@@ -1,0 +1,21 @@
+cmake_minimum_required(VERSION 3.20)
+project(heapmask_assets)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+set(SRC_DIR ${CMAKE_SOURCE_DIR})
+set(OUT_DIR ${CMAKE_BINARY_DIR})
+
+add_custom_command(
+  OUTPUT ${OUT_DIR}/abdomen_rgba8.dat
+  COMMAND ${Python3_EXECUTABLE} ${SRC_DIR}/pack_to_dat.py
+          --in ${SRC_DIR}/abdomen_png
+          --out ${OUT_DIR}/abdomen_rgba8.dat
+          --max_layers 100
+  DEPENDS ${SRC_DIR}/pack_to_dat.py
+  COMMENT "Prepacking PNGs -> abdomen_rgba8.dat"
+)
+
+add_custom_target(pack_textures ALL
+  DEPENDS ${OUT_DIR}/abdomen_rgba8.dat
+)

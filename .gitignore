@@ -1,0 +1,41 @@
+# Created by venv; see https://docs.python.org/3/library/venv.html
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.*
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE files
+.vscode/
+.idea/
+
+build/
+duplicates/
+exports/
+female_duplicates/
+images/
+include/
+Lib/
+mri_photos/
+Scripts/
+seg_out/
+threshold_images/
+abdomen_rgba8.dat

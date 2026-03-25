@@ -1,0 +1,13 @@
+{
+  "target_hsv": [
+    3,
+    168,
+    53
+  ],
+  "tol_h": 36,
+  "tol_s": 24,
+  "tol_v": 255,
+  "open_k": 0,
+  "close_k": 31,
+  "blur_k": 31
+}
