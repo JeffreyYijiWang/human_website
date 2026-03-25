@@ -1,0 +1,3 @@
+# Compatibility wrapper for users/tools expecting singular filename.
+# Vercel will use requirements.txt, which contains the same packages.
+-r requirements.txt
