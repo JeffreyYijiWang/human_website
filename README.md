@@ -1,6 +1,6 @@
 # human_website
 
-Vercel-ready volume visualizer that loads `volume_uint8.npy` and `volume_meta.npz` from remote object storage.
+Vercel-ready volume visualizer that loads `volume_uint8.npy` from Cloudflare R2 and `*_meta.npz` from Vercel Blob.
 
 ## Why object storage instead of GitHub for volume files?
 
@@ -16,14 +16,19 @@ These are better for large files than GitHub repo storage and also simpler than 
 ## Deploy to Vercel
 
 1. Push this repo to GitHub (code only, not giant volume binaries).
-2. Upload these files to object storage:
-   - `volume_uint8.npy`
-   - `volume_meta.npz`
-3. Copy their public/signed URLs.
-4. In Vercel project settings → Environment Variables, add:
-   - `VOLUME_UINT8_URL`
-   - `VOLUME_META_URL`
-5. Deploy.
+2. Add these Vercel environment variables (Project Settings → Environment Variables):
+   - `R2_ENDPOINT_URL` = `https://5074bfb26daee49df2301c7e2ba99795.r2.cloudflarestorage.com`
+   - `R2_ACCESS_KEY_ID` = your Cloudflare R2 access key id
+   - `R2_SECRET_ACCESS_KEY` = your Cloudflare R2 secret access key
+3. Deploy.
+
+By default, this app now uses:
+
+- `r2://humanvisualization/volume_uint8.npy` for the volume
+- `https://11srgbl8ig1rod0l.public.blob.vercel-storage.com/threshold_images/volume_meta.npz` for the default metadata
+- `https://11srgbl8ig1rod0l.public.blob.vercel-storage.com/threshold_images/male_meta.npz` for the `male` model metadata
+
+You can still override all models with `MODEL_CONFIG_JSON` (or the legacy `VOLUME_UINT8_URL` + `VOLUME_META_URL` env vars).
 
 ## Local run
 
@@ -43,6 +48,7 @@ Then open `http://127.0.0.1:8000` for the static UI and call:
 ## Notes
 
 - `slider_heap_image.py` loads and caches the remote volume/meta data.
+- R2 paths are supported via `r2://<bucket>/<key>` URIs and are fetched server-side with AWS SigV4-signed HTTP requests.
 - The API converts slices to grayscale PNGs for browser display.
 - If your object storage requires signed URLs, store those full URLs in Vercel env vars.
 
