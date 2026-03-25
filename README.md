@@ -45,6 +45,20 @@ Then open `http://127.0.0.1:8000` for the static UI and call:
 - `GET /api/volume-meta`
 - `GET /api/slice?axis=z&index=0`
 
+If you see `GET / 404 Not Found` when running `uvicorn api.index:app --reload`, make sure you're running this updated version. The FastAPI app now mounts `public/` for local development so `/` serves `public/index.html`.
+
+## Vercel Blob baseline upload snippet
+
+For uploading companion files to Vercel Blob from a JavaScript runtime (Next.js route/action/server function), this is a valid baseline:
+
+```ts
+import { put } from "@vercel/blob";
+
+const { url } = await put("articles/blob.txt", "Hello World!", { access: "public" });
+```
+
+Use this pattern when storing metadata files (`.npz`) in Blob, while keeping large volume data (`.npy`) in R2/S3-style storage.
+
 ## Notes
 
 - `slider_heap_image.py` loads and caches the remote volume/meta data.
