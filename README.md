@@ -22,6 +22,8 @@ These are better for large files than GitHub repo storage and also simpler than 
    - `R2_SECRET_ACCESS_KEY` = your Cloudflare R2 secret access key
 3. Deploy.
 
+Routing note: this project is configured so **all routes** are handled by `api/index.py` on Vercel (ASGI/FastAPI), which means `/`, `/api/health`, `/api/models`, etc. are all resolved by the FastAPI app. If you see JSON `{"detail":"Not Found"}`, it usually means the path did not reach the expected FastAPI route.
+
 By default, this app now uses:
 
 - `r2://humanvisualization/volume_uint8.npy` for the volume
