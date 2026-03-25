@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Volume Visualizer</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; }
+      .row { margin-bottom: 1rem; }
+      img { max-width: 90vw; border: 1px solid #ccc; image-rendering: pixelated; }
+      pre { background: #f6f6f6; padding: 0.75rem; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <h1>Volume Visualizer</h1>
+
+    <div class="row">
+      <label for="axis">Axis:</label>
+      <select id="axis">
+        <option value="z">z</option>
+        <option value="y">y</option>
+        <option value="x">x</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <label for="slice">Slice index:</label>
+      <input type="range" id="slice" min="0" max="0" value="0" />
+      <span id="sliceValue">0</span>
+    </div>
+
+    <div class="row">
+      <img id="sliceImage" alt="Volume slice" />
+    </div>
+
+    <h3>Metadata</h3>
+    <pre id="meta">Loading...</pre>
+
+    <script>
+      const axisEl = document.getElementById('axis');
+      const sliceEl = document.getElementById('slice');
+      const sliceValueEl = document.getElementById('sliceValue');
+      const imageEl = document.getElementById('sliceImage');
+      const metaEl = document.getElementById('meta');
+
+      let shape = [1, 1, 1];
+
+      function maxForAxis(axis) {
+        const axisToIdx = { z: 0, y: 1, x: 2 };
+        return shape[axisToIdx[axis]] - 1;
+      }
+
+      async function loadMeta() {
+        const res = await fetch('/api/volume-meta');
+        if (!res.ok) {
+          const err = await res.text();
+          metaEl.textContent = `Failed to load metadata: ${err}`;
+          return;
+        }
+
+        const payload = await res.json();
+        shape = payload.shape;
+        metaEl.textContent = JSON.stringify(payload.meta, null, 2);
+        setSliceBounds();
+        await updateImage();
+      }
+
+      function setSliceBounds() {
+        const max = Math.max(0, maxForAxis(axisEl.value));
+        sliceEl.max = String(max);
+        if (Number(sliceEl.value) > max) {
+          sliceEl.value = '0';
+        }
+        sliceValueEl.textContent = sliceEl.value;
+      }
+
+      async function updateImage() {
+        const axis = axisEl.value;
+        const index = Number(sliceEl.value);
+        sliceValueEl.textContent = String(index);
+        imageEl.src = `/api/slice?axis=${encodeURIComponent(axis)}&index=${index}&t=${Date.now()}`;
+      }
+
+      axisEl.addEventListener('change', async () => {
+        setSliceBounds();
+        await updateImage();
+      });
+      sliceEl.addEventListener('input', updateImage);
+
+      loadMeta();
+    </script>
+  </body>
+</html>
