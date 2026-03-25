@@ -87,3 +87,31 @@ The API endpoint `/api/slice` accepts optional parameters so motion controls are
 - `yaw` in `[-180, 180]`
 - `pitch` in `[-90, 90]`
 - `heap_depth` in `[0, 1]`
+
+
+### Local Python motion tools for `slider_heap_image.py`
+
+You can now run Brownian modulation + procedural curve generation directly from Python (local desktop workflow):
+
+```bash
+python slider_heap_image.py --demo-motion --frames 120 --fps 20 --max-slice 255
+```
+
+This prints a frame-by-frame stream for:
+
+- Brownian modulation
+- procedural curve-informed drift
+- yaw/pitch/heap_depth values
+
+You can also inspect local 3Dconnexion tuning via environment variables used by the same module:
+
+- `LOCAL_3DCONNEXION_ENABLED`
+- `LOCAL_3DCONNEXION_DEADZONE_T`
+- `LOCAL_3DCONNEXION_DEADZONE_R`
+- `LOCAL_3DCONNEXION_YAW_GAIN`
+- `LOCAL_3DCONNEXION_PITCH_GAIN`
+- `LOCAL_3DCONNEXION_MOVE_N_GAIN`
+- `LOCAL_3DCONNEXION_MOVE_U_GAIN`
+- `LOCAL_3DCONNEXION_MOVE_V_GAIN`
+- `LOCAL_3DCONNEXION_HEAP_GAIN`
+- `LOCAL_3DCONNEXION_SCALE_GAIN`
