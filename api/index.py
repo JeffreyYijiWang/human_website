@@ -1,8 +1,10 @@
 import json
 from io import BytesIO
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 import numpy as np
 from PIL import Image, ImageEnhance
 
@@ -157,3 +159,8 @@ def volume_slice(
     buf = BytesIO()
     image.save(buf, format="PNG")
     return Response(content=buf.getvalue(), media_type="image/png")
+
+
+public_dir = Path(__file__).resolve().parent.parent / "public"
+if public_dir.exists():
+    app.mount("/", StaticFiles(directory=str(public_dir), html=True), name="public")
