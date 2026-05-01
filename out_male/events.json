@@ -1,0 +1,37 @@
+[
+  {
+    "frame": 11,
+    "type": "softness",
+    "value": 0.05196268151479323
+  },
+  {
+    "frame": 20,
+    "type": "radius",
+    "value": 0.19535578270689372
+  },
+  {
+    "frame": 30,
+    "type": "stretch",
+    "value": 1.6376627601352856
+  },
+  {
+    "frame": 45,
+    "type": "toggle_heap",
+    "value": 0
+  },
+  {
+    "frame": 49,
+    "type": "radius",
+    "value": 0.18443240639822403
+  },
+  {
+    "frame": 64,
+    "type": "flip_dir",
+    "value": 1.0
+  },
+  {
+    "frame": 69,
+    "type": "depth",
+    "value": 0.198983535307254
+  }
+]
