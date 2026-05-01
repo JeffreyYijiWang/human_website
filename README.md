@@ -120,3 +120,18 @@ You can also inspect local 3Dconnexion tuning via environment variables used by 
 - `LOCAL_3DCONNEXION_MOVE_V_GAIN`
 - `LOCAL_3DCONNEXION_HEAP_GAIN`
 - `LOCAL_3DCONNEXION_SCALE_GAIN`
+
+
+### Configuration for your current objects
+
+For your current Cloudflare R2 public bucket and Vercel Blob metadata setup, configure:
+
+- `VOLUME_UINT8_URL=https://pub-541cfda29b1c457b8b1b8dc2e2cc2956.r2.dev/volume_uint8.npy`
+- `VOLUME_META_URL=<public URL for volume_meta.npz in Vercel Blob>`
+
+If you want to switch to the 14 GB male volume instead:
+
+- `VOLUME_UINT8_URL=https://pub-541cfda29b1c457b8b1b8dc2e2cc2956.r2.dev/male_uint8.npy`
+- `VOLUME_META_URL=<public URL for male_meta.npz in Vercel Blob>`
+
+The API now uses HTTP `Range` requests against the `.npy` URL for slice reads so the full volume is not downloaded into the serverless runtime.

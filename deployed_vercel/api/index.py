@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from PIL import Image, ImageEnhance
 
-from slider_heap_image import (
+from .slider_heap_image import (
     VolumeConfigError,
     VolumeLoadError,
     get_slice,
@@ -26,7 +26,7 @@ def volume_meta() -> JSONResponse:
     except (VolumeConfigError, VolumeLoadError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    shape = list(bundle.volume.shape)
+    shape = list(bundle.shape)
     return JSONResponse({"shape": shape, "meta": bundle.meta})
 
 

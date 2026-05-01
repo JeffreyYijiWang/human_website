@@ -1128,6 +1128,17 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.gizmo_prog["u_color"].value = (1.0, 0.90, 0.25, 1.0)
         self.n_vao.render(mode=moderngl.LINES)
 
+        if self.curve_edit_mode:
+            CV = self._curve_view_matrix()
+            MVPc = (P @ CV).astype(np.float32)
+            self.gizmo_prog["u_mvp"].write(MVPc.tobytes())
+            self.gizmo_prog["u_color"].value = (0.15, 0.85, 1.0, 1.0)
+            self.curve_vao.render(mode=moderngl.LINE_STRIP, vertices=self._curve_count)
+            self.gizmo_prog["u_color"].value = (0.95, 0.95, 0.95, 1.0)
+            self.curve_pts_vao.render(mode=moderngl.POINTS, vertices=self._curve_pts_count)
+            self.gizmo_prog["u_color"].value = (1.0, 0.3, 0.3, 1.0)
+            self.curve_gizmo_vao.render(mode=moderngl.LINES)
+
         self.ctx.disable(moderngl.DEPTH_TEST)
 
     def _render_curve_panel(self):
