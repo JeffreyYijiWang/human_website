@@ -61,6 +61,9 @@ uniform vec3  u_axis_u;
 uniform vec3  u_axis_v;
 uniform vec3  u_axis_n;
 uniform float u_scale;
+uniform int   u_surface_mode;
+uniform float u_curve_amp;
+uniform float u_curve_freq;
 
 uniform int   u_heap_enable;
 uniform vec2  u_mouse;
@@ -97,12 +100,18 @@ void main() {
 
     vec3 p0 = u_center + (u_axis_u * (s.x * u_scale)) + (u_axis_v * (s.y * u_scale));
 
-    if (any(lessThan(p0, vec3(0.0))) || any(greaterThan(p0, vec3(1.0)))) {
+    vec3 p_surface = p0;
+    if (u_surface_mode == 1) {
+        float wave = sin((s.x + s.y) * u_curve_freq) * u_curve_amp;
+        p_surface = p0 + u_axis_n * wave;
+    }
+
+    if (any(lessThan(p_surface, vec3(0.0))) || any(greaterThan(p_surface, vec3(1.0)))) {
         fragColor = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 
-    vec3 p = p0;
+    vec3 p = p_surface;
 
     if (u_heap_enable != 0) {
         float d = distance(v_uv, u_mouse);
@@ -114,10 +123,10 @@ void main() {
         p = p0 + (u_axis_n * (depth * u_heap_dir));
 
         if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) {
-            p = p0;
+            p = p_surface;
         }
 
-        vec4 outside = sample_volume(p0);
+        vec4 outside = sample_volume(p_surface);
         vec4 inside  = sample_volume(p);
 
         float rim0 = 1.0 - (u_softness / r);
@@ -396,6 +405,9 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.heap_dir = -1.0
         self.flip_y = 1
         self.bgr_input = 1
+        self.surface_mode = 0
+        self.curve_amp = 0.08
+        self.curve_freq = 8.0
         self._push_slice_uniforms()
 
         self._drag_plane = False
@@ -408,10 +420,10 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.gizmo_pitch = 0.5
         self.gizmo_radius = 2.4
 
-        self.mesh_view_yaw = 0.8
-        self.mesh_view_pitch = 0.45
-        self.mesh_view_radius = 1.8
-        self.mesh_view_target = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        self.mesh_rot_yaw = 0.8
+        self.mesh_rot_pitch = 0.45
+        self.mesh_pan = np.array([0.0, 0.0], dtype=np.float32)
+        self.mesh_zoom = 1.0
 
         self.view_mode = "slice"
         self.mesh_path = None
@@ -425,11 +437,20 @@ class MPRPlaneUI(mglw.WindowConfig):
         self._init_gizmo_geometry()
         self._build_hud_texture()
 
+        # frame history compositor (last 100 frames)
+        self.history_max = 100
+        self.history_enabled = False
+        self.history_tex = self.ctx.texture((self.wnd.width, self.wnd.height), 4, dtype="f1")
+        self.history_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self.history_fbo = self.ctx.framebuffer(color_attachments=[self.history_tex])
+        self._history_frames = []
+
         print("Ready.")
         print("  Slice mode: LMB rotate plane | MMB pan plane | wheel zoom")
         print("  U: upload mesh / toggle mesh mode")
         print("  Shift+U: reopen mesh picker")
-        print("  Mesh mode: LMB orbit mesh | MMB pan | wheel zoom")
+        print("  Mesh mode: rotatable plane camera (LMB rotate mesh on plane, MMB pan, wheel zoom)")
+        print("  T: cycle surface mode (plane -> curved -> uploaded mesh UV)")
 
     # ------------------------------------------------------------
     # Setup helpers
@@ -502,6 +523,9 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.slice_prog["u_axis_v"].value = tuple(float(x) for x in self.v)
         self.slice_prog["u_axis_n"].value = tuple(float(x) for x in self.n)
         self.slice_prog["u_scale"].value = float(self.scale)
+        self.slice_prog["u_surface_mode"].value = int(self.surface_mode)
+        self.slice_prog["u_curve_amp"].value = float(self.curve_amp)
+        self.slice_prog["u_curve_freq"].value = float(self.curve_freq)
         self.slice_prog["u_slice_px"].value = (float(self.wnd.width), float(self.wnd.height))
         self.slice_prog["u_heap_enable"].value = int(self.heap_enable)
         self.slice_prog["u_mouse"].value = (float(self.mouse_uv[0]), float(self.mouse_uv[1]))
@@ -625,12 +649,7 @@ class MPRPlaneUI(mglw.WindowConfig):
         return [x, y, z]
 
     def _mesh_eye(self):
-        cy, sy = np.cos(self.mesh_view_yaw), np.sin(self.mesh_view_yaw)
-        cp, sp = np.cos(self.mesh_view_pitch), np.sin(self.mesh_view_pitch)
-        x = self.mesh_view_radius * sy * cp
-        y = self.mesh_view_radius * cy * cp
-        z = self.mesh_view_radius * sp
-        return self.mesh_view_target + np.array([x, y, z], dtype=np.float32)
+        return np.array([0.0, 0.0, 2.2], dtype=np.float32)
 
     def _gizmo_viewport(self):
         W, H = self.wnd.width, self.wnd.height
@@ -732,17 +751,12 @@ class MPRPlaneUI(mglw.WindowConfig):
             return
 
         if self._drag_mesh_orbit:
-            self.mesh_view_yaw += dx * 0.005
-            self.mesh_view_pitch += -dy * 0.005
-            self.mesh_view_pitch = float(np.clip(self.mesh_view_pitch, -1.55, 1.55))
+            self.mesh_rot_yaw += dx * 0.005
+            self.mesh_rot_pitch += -dy * 0.005
+            self.mesh_rot_pitch = float(np.clip(self.mesh_rot_pitch, -1.55, 1.55))
 
         if self._drag_mesh_pan:
-            eye = self._mesh_eye()
-            forward = normalize(self.mesh_view_target - eye)
-            right = normalize(np.cross(forward, np.array([0.0, 0.0, 1.0], dtype=np.float32)))
-            up = normalize(np.cross(right, forward))
-            pan_scale = 0.002 * self.mesh_view_radius
-            self.mesh_view_target += (-dx * pan_scale) * right + (dy * pan_scale) * up
+            self.mesh_pan += np.array([dx, -dy], dtype=np.float32) * 0.002
 
     def on_mouse_scroll_event(self, x_offset, y_offset):
         if self.view_mode == "slice":
@@ -751,8 +765,8 @@ class MPRPlaneUI(mglw.WindowConfig):
             self._push_slice_uniforms()
             self._update_gizmo_geometry()
         else:
-            self.mesh_view_radius *= float(0.92 ** y_offset)
-            self.mesh_view_radius = float(np.clip(self.mesh_view_radius, 0.25, 10.0))
+            self.mesh_zoom *= float(0.92 ** y_offset)
+            self.mesh_zoom = float(np.clip(self.mesh_zoom, 0.2, 4.0))
 
     def on_key_event(self, key, action, modifiers):
         k = self.wnd.keys
@@ -764,6 +778,19 @@ class MPRPlaneUI(mglw.WindowConfig):
         if action == k.ACTION_PRESS:
             if key == k.U:
                 self._handle_u_press(modifiers)
+                return
+
+
+            if key == k.T:
+                self.surface_mode = (self.surface_mode + 1) % 3
+                self.slice_prog["u_surface_mode"].value = int(0 if self.surface_mode == 2 else self.surface_mode)
+                modes = {0: "plane", 1: "curve", 2: "uploaded-mesh"}
+                print(f"surface_mode={modes[self.surface_mode]}")
+                return
+
+            if key == k.TAB:
+                self.history_enabled = not self.history_enabled
+                print(f"history_enabled={self.history_enabled}")
                 return
 
             if key == k.H:
@@ -830,10 +857,11 @@ class MPRPlaneUI(mglw.WindowConfig):
                 self.heap_stretch = 1.0
                 self.heap_dir = -1.0
                 self.flip_y = 1
-                self.mesh_view_yaw = 0.8
-                self.mesh_view_pitch = 0.45
-                self.mesh_view_radius = 1.8
-                self.mesh_view_target[:] = 0.0
+                self.mesh_rot_yaw = 0.8
+                self.mesh_rot_pitch = 0.45
+                self.mesh_pan[:] = 0.0
+                self.mesh_zoom = 1.0
+                self.surface_mode = 0
                 self._update_plane_axes()
                 self._push_slice_uniforms()
                 self._update_gizmo_geometry()
@@ -872,24 +900,16 @@ class MPRPlaneUI(mglw.WindowConfig):
             self._update_gizmo_geometry()
             return
 
-        base = 0.8
-        forward = normalize(self.mesh_view_target - self._mesh_eye())
-        right = normalize(np.cross(forward, np.array([0.0, 0.0, 1.0], dtype=np.float32)))
-        up = normalize(np.cross(right, forward))
         for key, is_shift in list(self._held_keys):
-            step = base * dt * (3.0 if is_shift else 1.0)
+            step = dt * (120.0 if is_shift else 60.0)
             if key == k.W:
-                self.mesh_view_target += forward * step
+                self.mesh_pan[1] += step * 0.0005
             if key == k.S:
-                self.mesh_view_target -= forward * step
+                self.mesh_pan[1] -= step * 0.0005
             if key == k.A:
-                self.mesh_view_target -= right * step
+                self.mesh_pan[0] -= step * 0.0005
             if key == k.D:
-                self.mesh_view_target += right * step
-            if key == k.Q:
-                self.mesh_view_target -= up * step
-            if key == k.E:
-                self.mesh_view_target += up * step
+                self.mesh_pan[0] += step * 0.0005
 
     # ------------------------------------------------------------
     # Resize
@@ -897,6 +917,13 @@ class MPRPlaneUI(mglw.WindowConfig):
 
     def resize(self, width, height):
         self._push_slice_uniforms()
+        if hasattr(self, "history_tex"):
+            self.history_tex.release()
+            self.history_fbo.release()
+            self.history_tex = self.ctx.texture((max(1,width), max(1,height)), 4, dtype="f1")
+            self.history_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self.history_fbo = self.ctx.framebuffer(color_attachments=[self.history_tex])
+            self._history_frames.clear()
 
     # ------------------------------------------------------------
     # Render paths
@@ -921,8 +948,14 @@ class MPRPlaneUI(mglw.WindowConfig):
             return
 
         P = perspective(50.0, W / max(H, 1), 0.01, 50.0)
-        V = look_at(self._mesh_eye(), self.mesh_view_target, [0.0, 0.0, 1.0])
-        M = self.mesh_model
+        V = look_at(self._mesh_eye(), [0.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+        cy, sy = np.cos(self.mesh_rot_yaw), np.sin(self.mesh_rot_yaw)
+        cp, sp = np.cos(self.mesh_rot_pitch), np.sin(self.mesh_rot_pitch)
+        Ry = np.array([[cy,0,sy,0],[0,1,0,0],[-sy,0,cy,0],[0,0,0,1]], dtype=np.float32)
+        Rx = np.array([[1,0,0,0],[0,cp,-sp,0],[0,sp,cp,0],[0,0,0,1]], dtype=np.float32)
+        S = np.diag([self.mesh_zoom,self.mesh_zoom,self.mesh_zoom,1.0]).astype(np.float32)
+        T = translation_matrix([float(self.mesh_pan[0]), float(self.mesh_pan[1]), 0.0])
+        M = T @ Ry @ Rx @ S
         MVP = (P @ V @ M).astype(np.float32)
 
         self.mesh_prog["u_mvp"].write(MVP.tobytes())
@@ -962,16 +995,43 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.hud_tex.use(location=0)
         self.hud_vao.render(mode=moderngl.TRIANGLES)
 
+
+    def _capture_frame(self):
+        W, H = self.wnd.width, self.wnd.height
+        data = self.ctx.screen.read(viewport=(0, 0, W, H), components=4, dtype="f1")
+        arr = np.frombuffer(data, dtype=np.uint8).reshape(H, W, 4).copy()
+        self._history_frames.append(arr)
+        if len(self._history_frames) > self.history_max:
+            self._history_frames = self._history_frames[-self.history_max:]
+
+    def _composite_history(self):
+        if not self._history_frames:
+            return
+        stack = np.stack(self._history_frames, axis=0).astype(np.float32)
+        blended = np.mean(stack, axis=0).astype(np.uint8)
+        self.history_tex.write(blended.tobytes())
+        self.ctx.screen.use()
+        self.ctx.viewport = (0, 0, self.wnd.width, self.wnd.height)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.hud_prog["u_tex"].value = 0
+        self.history_tex.use(location=0)
+        self.hud_vao.render(mode=moderngl.TRIANGLES)
+
     def on_render(self, time: float, frame_time: float):
         self._apply_held_keys(frame_time)
 
-        if self.view_mode == "mesh" and self.mesh_loaded:
+        if self.surface_mode == 2 and self.mesh_loaded:
+            self._render_mesh_view()
+        elif self.view_mode == "mesh" and self.mesh_loaded:
             self._render_mesh_view()
         else:
             self._render_slice_view()
 
         self._render_gizmo()
         self._render_hud()
+        self._capture_frame()
+        if self.history_enabled:
+            self._composite_history()
 
 
 if __name__ == "__main__":
