@@ -84,12 +84,16 @@
         </select>
         <button id="addCurvePointBtn">Add point</button>
         <button id="removeCurvePointBtn">Remove selected</button>
+        <label><input type="checkbox" id="curveAffectsDisplay" checked /> Affect display in Curve mode</label>
+        <label><input type="checkbox" id="curveFrameBlend" checked /> Frame blend</label>
+        <button id="openCurveWindowBtn">Open Curve Window</button>
       </div>
       <div class="row">
         <canvas id="curveCanvas" width="900" height="440"></canvas>
       </div>
       <div class="row muted">
         Click a point to select. Drag colored gizmo axis handles (X red, Y green, Z blue) to move per-axis.
+        Press Tab inside curve canvas to cycle selected point.
       </div>
     </div>
 
@@ -119,6 +123,7 @@
       let lastFrameMs = performance.now();
       let noiseTime = 0;
       let velocity = { slice: 0, yaw: 0, pitch: 0, heap: 0 };
+      let prevFrameCanvas = null;
 
       function maxForAxis(axis) {
         const axisToIdx = { z: 0, y: 1, x: 2 };
@@ -196,14 +201,51 @@
         });
 
         const res = await fetch(`/api/slice?${params.toString()}`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (prevFrameCanvas) ctx.drawImage(prevFrameCanvas, 0, 0, canvas.width, canvas.height);
+          return;
+        }
 
         const blob = await res.blob();
         const bitmap = await createImageBitmap(blob);
         canvas.width = bitmap.width;
         canvas.height = bitmap.height;
+
+        if (curveModeEnabledEl.checked && curveFrameBlendEl.checked && prevFrameCanvas) {
+          ctx.globalAlpha = 0.35;
+          ctx.drawImage(prevFrameCanvas, 0, 0, canvas.width, canvas.height);
+          ctx.globalAlpha = 1;
+        }
+
         ctx.drawImage(bitmap, 0, 0);
+        if (curveModeEnabledEl.checked && curveAffectsDisplayEl.checked) {
+          drawCurveOverlayOnSlice();
+        }
+
+        prevFrameCanvas = document.createElement('canvas');
+        prevFrameCanvas.width = canvas.width;
+        prevFrameCanvas.height = canvas.height;
+        prevFrameCanvas.getContext('2d').drawImage(canvas, 0, 0);
         bitmap.close();
+      }
+
+
+      function drawCurveOverlayOnSlice() {
+        const samples = sampleCurve();
+        if (!samples.length) return;
+        const sx = canvas.width / 400;
+        const sy = canvas.height / 400;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,180,0,0.95)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        samples.forEach((p, i) => {
+          const x = canvas.width / 2 + p.x * sx;
+          const y = canvas.height / 2 - p.y * sy;
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.restore();
       }
 
       async function tick(now) {
@@ -284,6 +326,9 @@
       const removeCurvePointBtn = document.getElementById('removeCurvePointBtn');
       const curveCanvas = document.getElementById('curveCanvas');
       const curveCtx = curveCanvas.getContext('2d');
+      const curveAffectsDisplayEl = document.getElementById('curveAffectsDisplay');
+      const curveFrameBlendEl = document.getElementById('curveFrameBlend');
+      const openCurveWindowBtn = document.getElementById('openCurveWindowBtn');
 
       let curvePoints = [
         { x: -120, y: -50, z: -80 },
@@ -456,6 +501,33 @@
         drawCurveEditor();
       });
       curveCanvas.addEventListener('pointerup', () => { drag = null; });
+
+      curveCanvas.tabIndex = 0;
+      curveCanvas.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          if (!curvePoints.length) return;
+          selectedPoint = (selectedPoint + (e.shiftKey ? curvePoints.length - 1 : 1)) % curvePoints.length;
+          drawCurveEditor();
+        }
+      });
+
+      openCurveWindowBtn.addEventListener('click', () => {
+        const w = window.open('', 'curveEditorWindow', 'width=980,height=620');
+        if (!w) return;
+        w.document.write('<!doctype html><title>Curve Editor</title><style>body{margin:0;background:#0b1020;color:#fff;font-family:Arial;padding:12px}canvas{width:100%;height:90vh;border:1px solid #334155;background:#0f172a}</style><h3>Curve Editor (Mirror)</h3><canvas id="curveMirror" width="900" height="500"></canvas>');
+        w.document.close();
+        const mirror = w.document.getElementById('curveMirror');
+        const mctx = mirror.getContext('2d');
+        const pump = () => {
+          if (w.closed) return;
+          mctx.clearRect(0,0,mirror.width,mirror.height);
+          mctx.drawImage(curveCanvas,0,0,mirror.width,mirror.height);
+          w.requestAnimationFrame(pump);
+        };
+        pump();
+      });
+
 
       (async function init() {
         await loadMeta();
