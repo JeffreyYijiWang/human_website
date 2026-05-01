@@ -426,6 +426,9 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.mesh_zoom = 1.0
 
         self.view_mode = "slice"
+        self.surface_mode = 0
+        self.curve_amp = 0.08
+        self.curve_freq = 8.0
         self.mesh_path = None
         self.mesh_loaded = False
         self.mesh_vbo = None
