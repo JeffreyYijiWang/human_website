@@ -15,14 +15,14 @@ from .slider_heap_image import (
 app = FastAPI(title="Volume Visualizer API")
 
 
-@app.get("/health")
+@app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 
 
-@app.get("/models")
+@app.get("/api/models")
 def models() -> JSONResponse:
     try:
         return JSONResponse({"models": list_models()})
@@ -30,7 +30,7 @@ def models() -> JSONResponse:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.get("/volume-meta")
+@app.get("/api/volume-meta")
 def volume_meta(model_id: str | None = Query(default=None, alias="model")) -> JSONResponse:
     try:
         bundle = load_bundle(model_id)
@@ -41,7 +41,7 @@ def volume_meta(model_id: str | None = Query(default=None, alias="model")) -> JS
     return JSONResponse({"shape": shape, "meta": bundle.meta})
 
 
-@app.get("/slice")
+@app.get("/api/slice")
 def volume_slice(
     axis: str = Query("z", pattern="^(x|y|z)$"),
     index: int = Query(0, ge=0),
