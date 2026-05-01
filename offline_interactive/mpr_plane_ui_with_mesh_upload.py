@@ -330,8 +330,8 @@ class MPRPlaneUI(mglw.WindowConfig):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-        vol_path = Path("threshold_images") / "volume_uint8.npy"
+        BASE_DIR = Path(__file__).resolve().parent.parent
+        vol_path = BASE_DIR /Path("threshold_images") / "volume_uint8.npy"
         if not vol_path.exists():
             raise FileNotFoundError(f"Missing {vol_path}. Put your prebuilt volume there.")
 
