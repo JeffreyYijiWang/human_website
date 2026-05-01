@@ -337,6 +337,12 @@
         return samples.length ? samples : curvePoints;
       }
 
+
+      function requestMprPlaneUiScreenUpdate() {
+        // Keep curve editor updates in sync with the main MPR panel.
+        drawCurveEditor();
+      }
+
       function drawCurveEditor() {
         if (!curveModeEnabledEl.checked) return;
         curveCtx.clearRect(0, 0, curveCanvas.width, curveCanvas.height);
@@ -419,19 +425,19 @@
 
       curveModeEnabledEl.addEventListener('change', () => {
         curveEditorPanelEl.classList.toggle('hidden', !curveModeEnabledEl.checked);
-        drawCurveEditor();
+        requestMprPlaneUiScreenUpdate();
       });
-      curveTypeEl.addEventListener('change', drawCurveEditor);
-      curveViewEl.addEventListener('change', drawCurveEditor);
+      curveTypeEl.addEventListener('change', requestMprPlaneUiScreenUpdate);
+      curveViewEl.addEventListener('change', requestMprPlaneUiScreenUpdate);
       addCurvePointBtn.addEventListener('click', () => {
         const last = curvePoints[curvePoints.length - 1] || { x: 0, y: 0, z: 0 };
         curvePoints.push({ x: last.x + 30, y: last.y, z: last.z + 20 });
-        selectedPoint = curvePoints.length - 1; drawCurveEditor();
+        selectedPoint = curvePoints.length - 1; requestMprPlaneUiScreenUpdate();
       });
       removeCurvePointBtn.addEventListener('click', () => {
         if (curvePoints.length <= 2) return;
         curvePoints.splice(selectedPoint, 1);
-        selectedPoint = Math.max(0, selectedPoint - 1); drawCurveEditor();
+        selectedPoint = Math.max(0, selectedPoint - 1); requestMprPlaneUiScreenUpdate();
       });
       curveCanvas.addEventListener('pointerdown', (e) => {
         const r = curveCanvas.getBoundingClientRect();
@@ -442,7 +448,7 @@
         if (hit.type === 'point') selectedPoint = hit.idx;
         drag = { mode: hit.type, axis: hit.axis || null, x: mx, y: my };
         curveCanvas.setPointerCapture(e.pointerId);
-        drawCurveEditor();
+        requestMprPlaneUiScreenUpdate();
       });
       curveCanvas.addEventListener('pointermove', (e) => {
         if (!drag) return;
@@ -453,7 +459,7 @@
         if (drag.mode === 'axis' && drag.axis) applyAxisDrag(drag.axis, dx, dy);
         else if (drag.mode === 'point') { curvePoints[selectedPoint].x += dx * 0.5; curvePoints[selectedPoint].y -= dy * 0.5; }
         drag.x = mx; drag.y = my;
-        drawCurveEditor();
+        requestMprPlaneUiScreenUpdate();
       });
       curveCanvas.addEventListener('pointerup', () => { drag = null; });
 
