@@ -234,7 +234,8 @@ class OfflineMPR:
         return img
 
 # ---------- synthetic input generator ----------
-def generate_timeline(seconds, fps, seed):
+def generate_timeline(seconds, fps, seed, motion_boost=1.0, event_rate=1.0,
+                      teleport_on_boundary=True, boundary_margin=0.015):
     """
     Very slow, mostly imperceptible Brownian-like motion suitable for long renders.
     Over long durations (e.g. 1 hour) the center performs a slow wander that can
@@ -263,8 +264,10 @@ def generate_timeline(seconds, fps, seed):
 
     # Target traversal in normalized units for the full clip; scales by duration.
     travel_ratio = float(np.clip(seconds / 3600.0, 0.05, 1.0))
-    max_center_speed = (0.55 * travel_ratio) / max(seconds, 1.0)
-    max_mouse_speed = (0.40 * travel_ratio) / max(seconds, 1.0)
+    motion_boost = float(max(motion_boost, 0.05))
+    event_rate = float(max(event_rate, 0.05))
+    max_center_speed = ((0.55 * travel_ratio) / max(seconds, 1.0)) * motion_boost
+    max_mouse_speed = ((0.40 * travel_ratio) / max(seconds, 1.0)) * motion_boost
 
     # Brownian / OU velocity states (small per-frame deltas)
     v_center = np.zeros(3, dtype=np.float32)
@@ -283,10 +286,10 @@ def generate_timeline(seconds, fps, seed):
         t = f / max(frames - 1, 1)
 
         # Tiny, sparse toggles for subtle non-static behavior.
-        if rng.random() < 0.00035:
+        if rng.random() < (0.00035 * event_rate):
             state["dir"] *= -1.0
             events.append({"frame": f, "type": "flip_dir", "value": state["dir"]})
-        if rng.random() < 0.00025:
+        if rng.random() < (0.00025 * event_rate):
             state["heap_enable"] = 0 if state["heap_enable"] else 1
             events.append({"frame": f, "type": "toggle_heap", "value": state["heap_enable"]})
 
@@ -300,7 +303,14 @@ def generate_timeline(seconds, fps, seed):
         speed = float(np.linalg.norm(v_center))
         if speed > max_center_speed:
             v_center *= (max_center_speed / max(speed, 1e-8))
-        state["center"] = clamp01(state["center"] + v_center)
+        next_center = state["center"] + v_center
+        hit_boundary = bool(np.any(next_center <= boundary_margin) or np.any(next_center >= (1.0 - boundary_margin)))
+        if hit_boundary and teleport_on_boundary:
+            state["center"] = rng.uniform(boundary_margin, 1.0 - boundary_margin, size=3).astype(np.float32)
+            v_center *= 0.0
+            events.append({"frame": f, "type": "teleport_center", "value": [float(x) for x in state["center"]]})
+        else:
+            state["center"] = clamp01(next_center)
 
         # Slow mouse drift in UV with Brownian motion.
         mouse_drift = np.array([
@@ -312,6 +322,12 @@ def generate_timeline(seconds, fps, seed):
         if ms > max_mouse_speed:
             v_mouse *= (max_mouse_speed / max(ms, 1e-8))
         state["mouse_uv"] = clamp01(state["mouse_uv"] + v_mouse)
+
+        # Keep cursor roaming most of the viewport by reflecting at edges.
+        for ax in (0, 1):
+            if state["mouse_uv"][ax] <= 0.02 or state["mouse_uv"][ax] >= 0.98:
+                v_mouse[ax] *= -1.0
+                state["mouse_uv"][ax] = float(np.clip(state["mouse_uv"][ax], 0.02, 0.98))
 
         # Very slow axis rotation (yaw/pitch) with Brownian perturbation.
         v_yaw = (v_yaw * 0.9985) + (0.030 * math.sin(2.0 * math.pi * (0.016 * t + 0.30)) + rng.normal(0.0, 0.0012)) * dt
@@ -383,6 +399,14 @@ def main():
     ap.set_defaults(random_seed=True)
     ap.add_argument("--every", type=int, default=1, help="Save every Nth frame (1 = all)")
     ap.add_argument("--video", action="store_true", help="Also encode saved frames into an MP4 using ffmpeg.")
+    ap.add_argument("--motion-boost", type=float, default=1.0,
+                    help="Multiplier for Brownian movement speed (>1 = more motion).")
+    ap.add_argument("--event-rate", type=float, default=1.0,
+                    help="Multiplier for random event frequency (>1 = more toggles/flips).")
+    ap.add_argument("--no-teleport-on-boundary", action="store_true",
+                    help="Disable center teleport when it reaches the volume boundary.")
+    ap.add_argument("--boundary-margin", type=float, default=0.015,
+                    help="Boundary distance used to trigger teleporting (normalized 0..1).")
     ap.add_argument("--video-name", default="preview.mp4", help="Output video filename (inside --out).")
     args = ap.parse_args()
 
@@ -397,7 +421,15 @@ def main():
     frames_dir = out_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    per_frame, events = generate_timeline(args.seconds, args.fps, args.seed)
+    per_frame, events = generate_timeline(
+        args.seconds,
+        args.fps,
+        args.seed,
+        motion_boost=args.motion_boost,
+        event_rate=args.event_rate,
+        teleport_on_boundary=not args.no_teleport_on_boundary,
+        boundary_margin=args.boundary_margin,
+    )
 
     # Save timeline metadata
     (out_dir / "events.json").write_text(json.dumps(events, indent=2))
@@ -407,6 +439,10 @@ def main():
         "width": args.width,
         "height": args.height,
         "seed": args.seed,
+        "motion_boost": args.motion_boost,
+        "event_rate": args.event_rate,
+        "teleport_on_boundary": not args.no_teleport_on_boundary,
+        "boundary_margin": args.boundary_margin,
         "per_frame": per_frame,
     }, indent=2))
 
