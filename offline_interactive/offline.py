@@ -15,6 +15,9 @@ import argparse
 import json
 import math
 import os
+import shutil
+import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -370,9 +373,25 @@ def main():
     ap.add_argument("--fps", type=int, default=24)
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Seed value. With --deterministic, defaults to 0. With --random, auto-generated if omitted.")
+    seed_mode = ap.add_mutually_exclusive_group()
+    seed_mode.add_argument("--random", dest="random_seed", action="store_true",
+                           help="Use a random seed (default mode).")
+    seed_mode.add_argument("--deterministic", dest="random_seed", action="store_false",
+                           help="Use deterministic seed behavior (default seed=0 unless --seed is set).")
+    ap.set_defaults(random_seed=True)
     ap.add_argument("--every", type=int, default=1, help="Save every Nth frame (1 = all)")
+    ap.add_argument("--video", action="store_true", help="Also encode saved frames into an MP4 using ffmpeg.")
+    ap.add_argument("--video-name", default="preview.mp4", help="Output video filename (inside --out).")
     args = ap.parse_args()
+
+    if args.seed is None:
+        if args.random_seed:
+            # Use OS entropy so runs differ by default.
+            args.seed = int.from_bytes(os.urandom(8), "big") ^ time.time_ns()
+        else:
+            args.seed = 0
 
     out_dir = Path(args.out)
     frames_dir = out_dir / "frames"
@@ -416,6 +435,26 @@ def main():
         if (i % max(1, total // 10)) == 0:
             print(f"[render] {i}/{total}")
 
+    if args.video:
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            raise RuntimeError("ffmpeg not found in PATH. Install ffmpeg or run without --video.")
+
+        video_path = out_dir / args.video_name
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-framerate", str(args.fps),
+            "-i", str(frames_dir / "frame_%06d.png"),
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            str(video_path),
+        ]
+        print("[ffmpeg]", " ".join(cmd))
+        subprocess.run(cmd, check=True)
+        print(f"Video:    {video_path}")
+
+    print(f"Seed: {args.seed}")
     print(f"Done. Frames in: {frames_dir}")
     print(f"Timeline: {out_dir/'points.json'}")
     print(f"Events:   {out_dir/'events.json'}")
