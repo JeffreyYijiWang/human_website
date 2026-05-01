@@ -694,14 +694,14 @@ class MPRPlaneUI(mglw.WindowConfig):
         # box wireframe
         self.gizmo_prog["u_color"].value = (0.85, 0.90, 0.98, 1.0)
         self.box_vao.render(mode=moderngl.LINES)
-
+https://chatgpt.com/g/g-2fkFE8rbu-dall-e
         # plane slab
         self.gizmo_prog["u_color"].value = (1.0, 0.15, 0.15, 0.80)
         self.plane_vao.render(mode=moderngl.TRIANGLES)
 
         # normal arrow
         self.gizmo_prog["u_color"].value = (1.0, 0.90, 0.25, 1.0)
-        self.n_vao.render(mode=moderngl.LINES)
+        self.n_vao.render(mode=moderngl.LINES)https://chatgpt.com/gpts
 
         self.ctx.disable(moderngl.DEPTH_TEST)
 
