@@ -405,6 +405,9 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.heap_dir = -1.0
         self.flip_y = 1
         self.bgr_input = 1
+        self.surface_mode = 0
+        self.curve_amp = 0.08
+        self.curve_freq = 8.0
         self._push_slice_uniforms()
 
         self._drag_plane = False
@@ -436,6 +439,14 @@ class MPRPlaneUI(mglw.WindowConfig):
 
         self._init_gizmo_geometry()
         self._build_hud_texture()
+
+        # frame history compositor (last 100 frames)
+        self.history_max = 100
+        self.history_enabled = False
+        self.history_tex = self.ctx.texture((self.wnd.width, self.wnd.height), 4, dtype="f1")
+        self.history_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self.history_fbo = self.ctx.framebuffer(color_attachments=[self.history_tex])
+        self._history_frames = []
 
         print("Ready.")
         print("  Slice mode: LMB rotate plane | MMB pan plane | wheel zoom")
@@ -780,6 +791,11 @@ class MPRPlaneUI(mglw.WindowConfig):
                 print(f"surface_mode={modes[self.surface_mode]}")
                 return
 
+            if key == k.TAB:
+                self.history_enabled = not self.history_enabled
+                print(f"history_enabled={self.history_enabled}")
+                return
+
             if key == k.H:
                 self.heap_enable = not self.heap_enable
                 self.slice_prog["u_heap_enable"].value = int(self.heap_enable)
@@ -904,6 +920,13 @@ class MPRPlaneUI(mglw.WindowConfig):
 
     def resize(self, width, height):
         self._push_slice_uniforms()
+        if hasattr(self, "history_tex"):
+            self.history_tex.release()
+            self.history_fbo.release()
+            self.history_tex = self.ctx.texture((max(1,width), max(1,height)), 4, dtype="f1")
+            self.history_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self.history_fbo = self.ctx.framebuffer(color_attachments=[self.history_tex])
+            self._history_frames.clear()
 
     # ------------------------------------------------------------
     # Render paths
@@ -975,6 +998,28 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.hud_tex.use(location=0)
         self.hud_vao.render(mode=moderngl.TRIANGLES)
 
+
+    def _capture_frame(self):
+        W, H = self.wnd.width, self.wnd.height
+        data = self.ctx.screen.read(viewport=(0, 0, W, H), components=4, dtype="f1")
+        arr = np.frombuffer(data, dtype=np.uint8).reshape(H, W, 4).copy()
+        self._history_frames.append(arr)
+        if len(self._history_frames) > self.history_max:
+            self._history_frames = self._history_frames[-self.history_max:]
+
+    def _composite_history(self):
+        if not self._history_frames:
+            return
+        stack = np.stack(self._history_frames, axis=0).astype(np.float32)
+        blended = np.mean(stack, axis=0).astype(np.uint8)
+        self.history_tex.write(blended.tobytes())
+        self.ctx.screen.use()
+        self.ctx.viewport = (0, 0, self.wnd.width, self.wnd.height)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.hud_prog["u_tex"].value = 0
+        self.history_tex.use(location=0)
+        self.hud_vao.render(mode=moderngl.TRIANGLES)
+
     def on_render(self, time: float, frame_time: float):
         self._apply_held_keys(frame_time)
 
@@ -987,6 +1032,9 @@ class MPRPlaneUI(mglw.WindowConfig):
 
         self._render_gizmo()
         self._render_hud()
+        self._capture_frame()
+        if self.history_enabled:
+            self._composite_history()
 
 
 if __name__ == "__main__":
