@@ -1,6 +1,7 @@
 import ctypes
 import os
 from pathlib import Path
+from collections import deque
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -245,7 +246,7 @@ HUD_TEX_FRAG = r"""
 uniform sampler2D u_tex;
 in vec2 v_uv;
 out vec4 fragColor;
-void main() { fragColor = texture(u_tex, v_uv); }
+void main() { fragColor = texture(u_tex, vec2(v_uv.x, 1.0 - v_uv.y)); }
 """
 
 
@@ -420,6 +421,20 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.gizmo_pitch = 0.5
         self.gizmo_radius = 2.4
 
+        self.curve_edit_mode = False
+        self.curve_view = "perspective"
+        self.curve_type = "cubic"
+        self.curve_points = [
+            np.array([-0.35, -0.20, -0.20], dtype=np.float32),
+            np.array([-0.10, 0.25, -0.05], dtype=np.float32),
+            np.array([0.18, -0.25, 0.12], dtype=np.float32),
+            np.array([0.38, 0.15, 0.28], dtype=np.float32),
+        ]
+        self.curve_selected_idx = 0
+        self.curve_drag_axis = None
+        self.curve_drag_point = False
+
+
         self.mesh_rot_yaw = 0.8
         self.mesh_rot_pitch = 0.45
         self.mesh_pan = np.array([0.0, 0.0], dtype=np.float32)
@@ -443,10 +458,15 @@ class MPRPlaneUI(mglw.WindowConfig):
         # frame history compositor (last 100 frames)
         self.history_max = 100
         self.history_enabled = False
+        self.history_superposition = True
+        self.history_seconds = 1.0
+        self.key_color = np.array([255, 0, 0], dtype=np.uint8)
+        self.key_tolerance = 8
         self.history_tex = self.ctx.texture((self.wnd.width, self.wnd.height), 4, dtype="f1")
         self.history_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.history_fbo = self.ctx.framebuffer(color_attachments=[self.history_tex])
-        self._history_frames = []
+        self._history_frames = deque()
+        self._history_sum = None
 
         print("Ready.")
         print("  Slice mode: LMB rotate plane | MMB pan plane | wheel zoom")
@@ -489,10 +509,18 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.n_vbo = self.ctx.buffer(reserve=2 * 3 * 4)
         self.n_vao = self.ctx.simple_vertex_array(self.gizmo_prog, self.n_vbo, "in_pos")
 
+        self.curve_vbo = self.ctx.buffer(reserve=512 * 3 * 4)
+        self.curve_vao = self.ctx.simple_vertex_array(self.gizmo_prog, self.curve_vbo, "in_pos")
+        self.curve_pts_vbo = self.ctx.buffer(reserve=128 * 3 * 4)
+        self.curve_pts_vao = self.ctx.simple_vertex_array(self.gizmo_prog, self.curve_pts_vbo, "in_pos")
+        self.curve_gizmo_vbo = self.ctx.buffer(reserve=6 * 3 * 4)
+        self.curve_gizmo_vao = self.ctx.simple_vertex_array(self.gizmo_prog, self.curve_gizmo_vbo, "in_pos")
+
         self._update_gizmo_geometry()
+        self._update_curve_geometry()
 
     def _build_hud_texture(self):
-        img = Image.new("RGBA", (900, 180), (0, 0, 0, 0))
+        img = Image.new("RGBA", (980, 260), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         try:
             font = ImageFont.truetype("arial.ttf", 22)
@@ -501,11 +529,14 @@ class MPRPlaneUI(mglw.WindowConfig):
             font = ImageFont.load_default()
             font_small = ImageFont.load_default()
 
-        draw.rounded_rectangle((0, 0, 899, 179), radius=18, fill=(15, 18, 25, 180))
-        draw.text((18, 16), "U: upload / toggle mesh   |   Shift+U: choose another mesh", fill=(255, 255, 255, 255), font=font)
-        draw.text((18, 56), "slice mode: rotate plane / heap brush    |    mesh mode: orbit uploaded mesh with volume texture", fill=(210, 220, 235, 255), font=font_small)
-        draw.text((18, 90), "supported by trimesh: OBJ / PLY / STL / GLB / GLTF (triangle meshes recommended)", fill=(190, 205, 225, 255), font=font_small)
-        draw.text((18, 124), "the uploaded mesh is normalized into the volume bounds and textured by sampling the 3D scan", fill=(190, 205, 225, 255), font=font_small)
+        draw.rounded_rectangle((0, 0, 979, 259), radius=18, fill=(15, 18, 25, 180))
+        draw.text((18, 16), "Offline Controls Panel (imgui-style HUD)", fill=(255, 255, 255, 255), font=font)
+        draw.text((18, 46), "U: upload/toggle mesh | T: plane/curve/mesh surface | C: curve panel | V: curve view | B: curve type | P: add curve point", fill=(220, 230, 240, 255), font=font_small)
+        draw.text((18, 76), "Slice mode: LMB rotate plane, MMB pan, wheel zoom. Mesh mode: orbit/pan/zoom.", fill=(210, 220, 235, 255), font=font_small)
+        draw.text((18, 106), "TAB: 1s history buffer | M: superposition blend on/off | 1/2/3: choose transparent key color red/black/white", fill=(190, 205, 225, 255), font=font_small)
+        draw.text((18, 136), "Transparent key color defaults to RED and is removed from history compositing.", fill=(190, 205, 225, 255), font=font_small)
+        draw.text((18, 166), "Curve panel is now separate from the orientation gizmo.", fill=(190, 205, 225, 255), font=font_small)
+        draw.text((18, 196), "Supported meshes: OBJ / PLY / STL / GLB / GLTF", fill=(190, 205, 225, 255), font=font_small)
 
         self.hud_tex = self.ctx.texture(img.size, 4, img.tobytes())
         self.hud_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
@@ -662,6 +693,11 @@ class MPRPlaneUI(mglw.WindowConfig):
         gy0 = H - giz_px - pad
         return gx0, gy0, giz_px
 
+    def _curve_panel_viewport(self):
+        W, H = self.wnd.width, self.wnd.height
+        panel = int(min(W, H) * 0.34)
+        return 12, H - panel - 210, panel
+
     def _update_gizmo_geometry(self):
         c = self.center
         u = self.u
@@ -696,6 +732,57 @@ class MPRPlaneUI(mglw.WindowConfig):
         arrow = np.array([start, end], dtype=np.float32)
         self.n_vbo.write(arrow.tobytes())
 
+
+    def _curve_segments(self):
+        if len(self.curve_points) < 2:
+            return []
+        if self.curve_type == "poly":
+            return [self.curve_points]
+        seg_size = 3 if self.curve_type == "quadratic" else 4
+        stride = 2 if self.curve_type == "quadratic" else 3
+        segs = []
+        i = 0
+        while i + seg_size <= len(self.curve_points):
+            segs.append(self.curve_points[i:i+seg_size])
+            i += stride
+        return segs if segs else [self.curve_points]
+
+    def _bezier_point(self, seg, t):
+        work = [p.copy() for p in seg]
+        while len(work) > 1:
+            work = [work[i] * (1.0 - t) + work[i + 1] * t for i in range(len(work)-1)]
+        return work[0]
+
+    def _curve_view_matrix(self):
+        if self.curve_view == "front":
+            return look_at([0, -2.0, 0], [0,0,0], [0,0,1])
+        if self.curve_view == "side":
+            return look_at([2.0, 0, 0], [0,0,0], [0,0,1])
+        if self.curve_view == "top":
+            return look_at([0, 0, 2.0], [0,0,0], [0,1,0])
+        return look_at(eye=self._gizmo_eye(), target=[0,0,0], up=[0,0,1])
+
+    def _update_curve_geometry(self):
+        samples = []
+        for seg in self._curve_segments():
+            for i in range(40):
+                samples.append(self._bezier_point(seg, i / 39.0))
+        if not samples:
+            samples = self.curve_points
+        curve = np.array(samples, dtype=np.float32)
+        self.curve_vbo.orphan(size=max(curve.nbytes, 12))
+        self.curve_vbo.write(curve.tobytes())
+        self._curve_count = len(curve)
+
+        pts = np.array(self.curve_points, dtype=np.float32)
+        self.curve_pts_vbo.orphan(size=max(pts.nbytes, 12))
+        self.curve_pts_vbo.write(pts.tobytes())
+        self._curve_pts_count = len(pts)
+
+        p = self.curve_points[self.curve_selected_idx]
+        g = np.array([p, p + np.array([0.18,0,0],np.float32), p, p + np.array([0,0.18,0],np.float32), p, p + np.array([0,0,0.18],np.float32)], dtype=np.float32)
+        self.curve_gizmo_vbo.write(g.tobytes())
+
     # ------------------------------------------------------------
     # Input
     # ------------------------------------------------------------
@@ -709,6 +796,11 @@ class MPRPlaneUI(mglw.WindowConfig):
     def on_mouse_press_event(self, x, y, button):
         LEFT = self.wnd.mouse.left
         MIDDLE = self.wnd.mouse.middle
+
+        if self.curve_edit_mode:
+            self._curve_drag_start = (x, y)
+            self.curve_drag_point = True
+            return
 
         if self.view_mode == "slice":
             if button == LEFT:
@@ -728,11 +820,21 @@ class MPRPlaneUI(mglw.WindowConfig):
         if button == LEFT:
             self._drag_plane = False
             self._drag_mesh_orbit = False
+            self.curve_drag_point = False
         if button == MIDDLE:
             self._drag_pan = False
             self._drag_mesh_pan = False
 
     def on_mouse_drag_event(self, x, y, dx, dy):
+        if self.curve_edit_mode and self.curve_drag_point:
+            p = self.curve_points[self.curve_selected_idx]
+            p[0] += dx * 0.0015
+            p[1] += -dy * 0.0015
+            p[:] = np.clip(p, -0.5, 0.5)
+            self.curve_points[self.curve_selected_idx] = p
+            self._update_curve_geometry()
+            return
+
         if self.view_mode == "slice":
             if self._drag_plane:
                 self.yaw += dx * 0.005
@@ -794,6 +896,44 @@ class MPRPlaneUI(mglw.WindowConfig):
             if key == k.TAB:
                 self.history_enabled = not self.history_enabled
                 print(f"history_enabled={self.history_enabled}")
+                return
+
+            if key == k.C:
+                self.curve_edit_mode = not self.curve_edit_mode
+                print(f"curve_edit_mode={self.curve_edit_mode}")
+                return
+            if key == k.V:
+                views = ["perspective", "front", "side", "top"]
+                self.curve_view = views[(views.index(self.curve_view) + 1) % len(views)]
+                print(f"curve_view={self.curve_view}")
+                return
+            if key == k.B:
+                types = ["cubic", "quadratic", "poly"]
+                self.curve_type = types[(types.index(self.curve_type) + 1) % len(types)]
+                self._update_curve_geometry()
+                print(f"curve_type={self.curve_type}")
+                return
+            if key == k.P:
+                last = self.curve_points[-1]
+                self.curve_points.append((last + np.array([0.1, 0.0, 0.05], dtype=np.float32)).astype(np.float32))
+                self.curve_selected_idx = len(self.curve_points)-1
+                self._update_curve_geometry()
+                return
+            if key == k.M:
+                self.history_superposition = not self.history_superposition
+                print(f"history_superposition={self.history_superposition}")
+                return
+            if key == k.KEY_1:
+                self.key_color = np.array([255, 0, 0], dtype=np.uint8)
+                print("key_color=red")
+                return
+            if key == k.KEY_2:
+                self.key_color = np.array([0, 0, 0], dtype=np.uint8)
+                print("key_color=black")
+                return
+            if key == k.KEY_3:
+                self.key_color = np.array([255, 255, 255], dtype=np.uint8)
+                print("key_color=white")
                 return
 
             if key == k.H:
@@ -927,6 +1067,7 @@ class MPRPlaneUI(mglw.WindowConfig):
             self.history_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
             self.history_fbo = self.ctx.framebuffer(color_attachments=[self.history_tex])
             self._history_frames.clear()
+            self._history_sum = None
 
     # ------------------------------------------------------------
     # Render paths
@@ -989,10 +1130,28 @@ class MPRPlaneUI(mglw.WindowConfig):
 
         self.ctx.disable(moderngl.DEPTH_TEST)
 
+    def _render_curve_panel(self):
+        if not self.curve_edit_mode:
+            return
+        x0, y0, px = self._curve_panel_viewport()
+        self.ctx.viewport = (x0, max(0, y0), px, px)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        P = perspective(45.0, 1.0, 0.05, 10.0)
+        CV = self._curve_view_matrix()
+        MVPc = (P @ CV).astype(np.float32)
+        self.gizmo_prog["u_mvp"].write(MVPc.tobytes())
+        self.gizmo_prog["u_color"].value = (0.15, 0.85, 1.0, 1.0)
+        self.curve_vao.render(mode=moderngl.LINE_STRIP, vertices=self._curve_count)
+        self.gizmo_prog["u_color"].value = (0.95, 0.95, 0.95, 1.0)
+        self.curve_pts_vao.render(mode=moderngl.POINTS, vertices=self._curve_pts_count)
+        self.gizmo_prog["u_color"].value = (1.0, 0.3, 0.3, 1.0)
+        self.curve_gizmo_vao.render(mode=moderngl.LINES)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+
     def _render_hud(self):
         W, H = self.wnd.width, self.wnd.height
-        hud_w = min(900, W - 24)
-        hud_h = 180
+        hud_w = min(980, W - 24)
+        hud_h = 260
         self.ctx.viewport = (12, max(12, H - hud_h - 12), hud_w, hud_h)
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.hud_tex.use(location=0)
@@ -1003,15 +1162,31 @@ class MPRPlaneUI(mglw.WindowConfig):
         W, H = self.wnd.width, self.wnd.height
         data = self.ctx.screen.read(viewport=(0, 0, W, H), components=4, dtype="f1")
         arr = np.frombuffer(data, dtype=np.uint8).reshape(H, W, 4).copy()
-        self._history_frames.append(arr)
-        if len(self._history_frames) > self.history_max:
-            self._history_frames = self._history_frames[-self.history_max:]
+        now = float(self.wnd.time)
+        rgb = arr[:, :, :3]
+        alpha = arr[:, :, 3:4]
+        key_mask = np.all(np.abs(rgb.astype(np.int16) - self.key_color.astype(np.int16)) <= self.key_tolerance, axis=2, keepdims=True)
+        rgb = np.where(key_mask, 0, rgb)
+        alpha = np.where(key_mask, 0, alpha)
+        frame = np.concatenate([rgb, alpha], axis=2).astype(np.uint8)
+
+        if self._history_sum is None or self._history_sum.shape != frame.shape:
+            self._history_sum = np.zeros_like(frame, dtype=np.float32)
+            self._history_frames.clear()
+        self._history_frames.append((now, frame))
+        self._history_sum += frame.astype(np.float32)
+        while self._history_frames and (now - self._history_frames[0][0]) > self.history_seconds:
+            _, old = self._history_frames.popleft()
+            self._history_sum -= old.astype(np.float32)
 
     def _composite_history(self):
         if not self._history_frames:
             return
-        stack = np.stack(self._history_frames, axis=0).astype(np.float32)
-        blended = np.mean(stack, axis=0).astype(np.uint8)
+        n = max(1, len(self._history_frames))
+        if self.history_superposition:
+            blended = np.clip(self._history_sum / n, 0, 255).astype(np.uint8)
+        else:
+            blended = self._history_frames[-1][1]
         self.history_tex.write(blended.tobytes())
         self.ctx.screen.use()
         self.ctx.viewport = (0, 0, self.wnd.width, self.wnd.height)
@@ -1031,6 +1206,7 @@ class MPRPlaneUI(mglw.WindowConfig):
             self._render_slice_view()
 
         self._render_gizmo()
+        self._render_curve_panel()
         self._render_hud()
         self._capture_frame()
         if self.history_enabled:
