@@ -39,3 +39,4 @@ Scripts/
 seg_out/
 threshold_images/
 abdomen_rgba8.dat
+model.obj
