@@ -1,5 +1,10 @@
 # human_website
 
+## Repository organization
+
+- `deployed_vercel/` contains the deployed website and Vercel serverless API code.
+- `offline_interactive/` contains local/offline interactive scripts and desktop tooling.
+
 Vercel-ready volume visualizer that loads `volume_uint8.npy` and `volume_meta.npz` from remote object storage.
 
 ## Why object storage instead of GitHub for volume files?
@@ -30,8 +35,8 @@ These are better for large files than GitHub repo storage and also simpler than 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn api.index:app --reload
+pip install -r deployed_vercel/requirements.txt
+uvicorn deployed_vercel.api.index:app --reload
 ```
 
 Then open `http://127.0.0.1:8000` for the static UI and call:
@@ -42,7 +47,7 @@ Then open `http://127.0.0.1:8000` for the static UI and call:
 
 ## Notes
 
-- `slider_heap_image.py` loads and caches the remote volume/meta data.
+- `offline_interactive/slider_heap_image.py` loads and caches the remote volume/meta data.
 - The API converts slices to grayscale PNGs for browser display.
 - If your object storage requires signed URLs, store those full URLs in Vercel env vars.
 
@@ -51,7 +56,7 @@ Then open `http://127.0.0.1:8000` for the static UI and call:
 
 Vercel serverless functions cannot read USB HID devices, so SpaceMouse input must run in your local desktop OpenGL viewer process.
 
-This repo now includes `spacemouse_integration.py` with a reusable `SpaceMouseController` that maps SpaceMouse axes to viewer state (`yaw`, `pitch`, `center`, `heap_depth`, `scale`) using deadzones and gains.
+This repo now includes `offline_interactive/spacemouse_integration.py` with a reusable `SpaceMouseController` that maps SpaceMouse axes to viewer state (`yaw`, `pitch`, `center`, `heap_depth`, `scale`) using deadzones and gains.
 
 Install locally:
 
@@ -89,12 +94,12 @@ The API endpoint `/api/slice` accepts optional parameters so motion controls are
 - `heap_depth` in `[0, 1]`
 
 
-### Local Python motion tools for `slider_heap_image.py`
+### Local Python motion tools for `offline_interactive/slider_heap_image.py`
 
 You can now run Brownian modulation + procedural curve generation directly from Python (local desktop workflow):
 
 ```bash
-python slider_heap_image.py --demo-motion --frames 120 --fps 20 --max-slice 255
+python offline_interactive/slider_heap_image.py --demo-motion --frames 120 --fps 20 --max-slice 255
 ```
 
 This prints a frame-by-frame stream for:
