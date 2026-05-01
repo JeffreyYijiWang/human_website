@@ -704,24 +704,40 @@ class MPRPlaneUI(mglw.WindowConfig):
         v = self.v
         n = self.n
         s = self.scale
-
-        p00 = (c - u * s - v * s) - 0.5
-        p10 = (c + u * s - v * s) - 0.5
-        p01 = (c - u * s + v * s) - 0.5
-        p11 = (c + u * s + v * s) - 0.5
-
-        t = 0.02
-        off = n * (t * 0.5)
-        a00, a10, a01, a11 = p00 + off, p10 + off, p01 + off, p11 + off
-        b00, b10, b01, b11 = p00 - off, p10 - off, p01 - off, p11 - off
-
+        grid = 20
+        t = 0.015
         tris = []
-        tris += [a00, a10, a01, a01, a10, a11]
-        tris += [b00, b01, b10, b01, b11, b10]
-        tris += [a00, b00, a10, a10, b00, b10]
-        tris += [a10, b10, a11, a11, b10, b11]
-        tris += [a11, b11, a01, a01, b11, b01]
-        tris += [a01, b01, a00, a00, b01, b00]
+        mu = (float(self.mouse_uv[0]) * 2.0) - 1.0
+        mv = (float(self.mouse_uv[1]) * 2.0) - 1.0
+        now = float(getattr(self, "_now", 0.0))
+        curve_x = np.sin(now * 1.3 + np.linspace(-1.0, 1.0, grid + 1) * (3.0 + self.curve_freq * 0.2))
+        curve_y = np.cos(now * 1.6 + np.linspace(-1.0, 1.0, grid + 1) * (2.0 + self.curve_freq * 0.2))
+
+        def disp(iu, iv):
+            x = -1.0 + (2.0 * iu / grid)
+            y = -1.0 + (2.0 * iv / grid)
+            d2 = (x - mu) ** 2 + (y - mv) ** 2
+            sigma = max(1e-4, self.heap_radius ** 2)
+            gauss = np.exp(-d2 / (2.0 * sigma))
+            dip = self.heap_depth * self.heap_dir * gauss
+            terrain = self.curve_amp * (curve_x[iu] + curve_y[iv]) * 0.5
+            return dip + terrain
+
+        for iy in range(grid):
+            for ix in range(grid):
+                pts = []
+                for ox, oy in [(0,0),(1,0),(0,1),(1,1)]:
+                    uu = -1.0 + (2.0 * (ix + ox) / grid)
+                    vv = -1.0 + (2.0 * (iy + oy) / grid)
+                    d = disp(ix + ox, iy + oy)
+                    p = (c + u * (uu * s) + v * (vv * s) + n * d) - 0.5
+                    pts.append(p)
+                p00, p10, p01, p11 = pts
+                off00 = n * (t * 0.5)
+                a00, a10, a01, a11 = p00 + off00, p10 + off00, p01 + off00, p11 + off00
+                b00, b10, b01, b11 = p00 - off00, p10 - off00, p01 - off00, p11 - off00
+                tris += [a00, a10, a01, a01, a10, a11]
+                tris += [b00, b01, b10, b01, b11, b10]
 
         plane = np.array(tris, dtype=np.float32)
         self.plane_vbo.orphan(size=plane.nbytes)
@@ -1159,6 +1175,24 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.curve_gizmo_vao.render(mode=moderngl.LINES)
         self.ctx.disable(moderngl.DEPTH_TEST)
 
+    def _render_curve_panel(self):
+        if not self.curve_edit_mode:
+            return
+        x0, y0, px = self._curve_panel_viewport()
+        self.ctx.viewport = (x0, max(0, y0), px, px)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        P = perspective(45.0, 1.0, 0.05, 10.0)
+        CV = self._curve_view_matrix()
+        MVPc = (P @ CV).astype(np.float32)
+        self.gizmo_prog["u_mvp"].write(MVPc.tobytes())
+        self.gizmo_prog["u_color"].value = (0.15, 0.85, 1.0, 1.0)
+        self.curve_vao.render(mode=moderngl.LINE_STRIP, vertices=self._curve_count)
+        self.gizmo_prog["u_color"].value = (0.95, 0.95, 0.95, 1.0)
+        self.curve_pts_vao.render(mode=moderngl.POINTS, vertices=self._curve_pts_count)
+        self.gizmo_prog["u_color"].value = (1.0, 0.3, 0.3, 1.0)
+        self.curve_gizmo_vao.render(mode=moderngl.LINES)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+
     def _render_hud(self):
         W, H = self.wnd.width, self.wnd.height
         hud_w = min(980, W - 24)
@@ -1173,7 +1207,7 @@ class MPRPlaneUI(mglw.WindowConfig):
         W, H = self.wnd.width, self.wnd.height
         data = self.ctx.screen.read(viewport=(0, 0, W, H), components=4, dtype="f1")
         arr = np.frombuffer(data, dtype=np.uint8).reshape(H, W, 4).copy()
-        now = float(self.wnd.time)
+        now = float(getattr(self, "_now", 0.0))
         rgb = arr[:, :, :3]
         alpha = arr[:, :, 3:4]
         key_mask = np.all(np.abs(rgb.astype(np.int16) - self.key_color.astype(np.int16)) <= self.key_tolerance, axis=2, keepdims=True)
@@ -1207,6 +1241,8 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.hud_vao.render(mode=moderngl.TRIANGLES)
 
     def on_render(self, time: float, frame_time: float):
+        self._now = float(time)
+        self._update_gizmo_geometry()
         self._apply_held_keys(frame_time)
 
         if self.surface_mode == 2 and self.mesh_loaded:
