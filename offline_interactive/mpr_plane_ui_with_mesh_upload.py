@@ -420,6 +420,20 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.gizmo_pitch = 0.5
         self.gizmo_radius = 2.4
 
+        self.curve_edit_mode = False
+        self.curve_view = "perspective"
+        self.curve_type = "cubic"
+        self.curve_points = [
+            np.array([-0.35, -0.20, -0.20], dtype=np.float32),
+            np.array([-0.10, 0.25, -0.05], dtype=np.float32),
+            np.array([0.18, -0.25, 0.12], dtype=np.float32),
+            np.array([0.38, 0.15, 0.28], dtype=np.float32),
+        ]
+        self.curve_selected_idx = 0
+        self.curve_drag_axis = None
+        self.curve_drag_point = False
+
+
         self.mesh_rot_yaw = 0.8
         self.mesh_rot_pitch = 0.45
         self.mesh_pan = np.array([0.0, 0.0], dtype=np.float32)
@@ -489,7 +503,15 @@ class MPRPlaneUI(mglw.WindowConfig):
         self.n_vbo = self.ctx.buffer(reserve=2 * 3 * 4)
         self.n_vao = self.ctx.simple_vertex_array(self.gizmo_prog, self.n_vbo, "in_pos")
 
+        self.curve_vbo = self.ctx.buffer(reserve=512 * 3 * 4)
+        self.curve_vao = self.ctx.simple_vertex_array(self.gizmo_prog, self.curve_vbo, "in_pos")
+        self.curve_pts_vbo = self.ctx.buffer(reserve=128 * 3 * 4)
+        self.curve_pts_vao = self.ctx.simple_vertex_array(self.gizmo_prog, self.curve_pts_vbo, "in_pos")
+        self.curve_gizmo_vbo = self.ctx.buffer(reserve=6 * 3 * 4)
+        self.curve_gizmo_vao = self.ctx.simple_vertex_array(self.gizmo_prog, self.curve_gizmo_vbo, "in_pos")
+
         self._update_gizmo_geometry()
+        self._update_curve_geometry()
 
     def _build_hud_texture(self):
         img = Image.new("RGBA", (900, 180), (0, 0, 0, 0))
@@ -696,6 +718,57 @@ class MPRPlaneUI(mglw.WindowConfig):
         arrow = np.array([start, end], dtype=np.float32)
         self.n_vbo.write(arrow.tobytes())
 
+
+    def _curve_segments(self):
+        if len(self.curve_points) < 2:
+            return []
+        if self.curve_type == "poly":
+            return [self.curve_points]
+        seg_size = 3 if self.curve_type == "quadratic" else 4
+        stride = 2 if self.curve_type == "quadratic" else 3
+        segs = []
+        i = 0
+        while i + seg_size <= len(self.curve_points):
+            segs.append(self.curve_points[i:i+seg_size])
+            i += stride
+        return segs if segs else [self.curve_points]
+
+    def _bezier_point(self, seg, t):
+        work = [p.copy() for p in seg]
+        while len(work) > 1:
+            work = [work[i] * (1.0 - t) + work[i + 1] * t for i in range(len(work)-1)]
+        return work[0]
+
+    def _curve_view_matrix(self):
+        if self.curve_view == "front":
+            return look_at([0, -2.0, 0], [0,0,0], [0,0,1])
+        if self.curve_view == "side":
+            return look_at([2.0, 0, 0], [0,0,0], [0,0,1])
+        if self.curve_view == "top":
+            return look_at([0, 0, 2.0], [0,0,0], [0,1,0])
+        return look_at(eye=self._gizmo_eye(), target=[0,0,0], up=[0,0,1])
+
+    def _update_curve_geometry(self):
+        samples = []
+        for seg in self._curve_segments():
+            for i in range(40):
+                samples.append(self._bezier_point(seg, i / 39.0))
+        if not samples:
+            samples = self.curve_points
+        curve = np.array(samples, dtype=np.float32)
+        self.curve_vbo.orphan(size=max(curve.nbytes, 12))
+        self.curve_vbo.write(curve.tobytes())
+        self._curve_count = len(curve)
+
+        pts = np.array(self.curve_points, dtype=np.float32)
+        self.curve_pts_vbo.orphan(size=max(pts.nbytes, 12))
+        self.curve_pts_vbo.write(pts.tobytes())
+        self._curve_pts_count = len(pts)
+
+        p = self.curve_points[self.curve_selected_idx]
+        g = np.array([p, p + np.array([0.18,0,0],np.float32), p, p + np.array([0,0.18,0],np.float32), p, p + np.array([0,0,0.18],np.float32)], dtype=np.float32)
+        self.curve_gizmo_vbo.write(g.tobytes())
+
     # ------------------------------------------------------------
     # Input
     # ------------------------------------------------------------
@@ -709,6 +782,11 @@ class MPRPlaneUI(mglw.WindowConfig):
     def on_mouse_press_event(self, x, y, button):
         LEFT = self.wnd.mouse.left
         MIDDLE = self.wnd.mouse.middle
+
+        if self.curve_edit_mode:
+            self._curve_drag_start = (x, y)
+            self.curve_drag_point = True
+            return
 
         if self.view_mode == "slice":
             if button == LEFT:
@@ -728,11 +806,21 @@ class MPRPlaneUI(mglw.WindowConfig):
         if button == LEFT:
             self._drag_plane = False
             self._drag_mesh_orbit = False
+            self.curve_drag_point = False
         if button == MIDDLE:
             self._drag_pan = False
             self._drag_mesh_pan = False
 
     def on_mouse_drag_event(self, x, y, dx, dy):
+        if self.curve_edit_mode and self.curve_drag_point:
+            p = self.curve_points[self.curve_selected_idx]
+            p[0] += dx * 0.0015
+            p[1] += -dy * 0.0015
+            p[:] = np.clip(p, -0.5, 0.5)
+            self.curve_points[self.curve_selected_idx] = p
+            self._update_curve_geometry()
+            return
+
         if self.view_mode == "slice":
             if self._drag_plane:
                 self.yaw += dx * 0.005
@@ -794,6 +882,28 @@ class MPRPlaneUI(mglw.WindowConfig):
             if key == k.TAB:
                 self.history_enabled = not self.history_enabled
                 print(f"history_enabled={self.history_enabled}")
+                return
+
+            if key == k.C:
+                self.curve_edit_mode = not self.curve_edit_mode
+                print(f"curve_edit_mode={self.curve_edit_mode}")
+                return
+            if key == k.V:
+                views = ["perspective", "front", "side", "top"]
+                self.curve_view = views[(views.index(self.curve_view) + 1) % len(views)]
+                print(f"curve_view={self.curve_view}")
+                return
+            if key == k.B:
+                types = ["cubic", "quadratic", "poly"]
+                self.curve_type = types[(types.index(self.curve_type) + 1) % len(types)]
+                self._update_curve_geometry()
+                print(f"curve_type={self.curve_type}")
+                return
+            if key == k.P:
+                last = self.curve_points[-1]
+                self.curve_points.append((last + np.array([0.1, 0.0, 0.05], dtype=np.float32)).astype(np.float32))
+                self.curve_selected_idx = len(self.curve_points)-1
+                self._update_curve_geometry()
                 return
 
             if key == k.H:
@@ -986,6 +1096,17 @@ class MPRPlaneUI(mglw.WindowConfig):
 
         self.gizmo_prog["u_color"].value = (1.0, 0.90, 0.25, 1.0)
         self.n_vao.render(mode=moderngl.LINES)
+
+        if self.curve_edit_mode:
+            CV = self._curve_view_matrix()
+            MVPc = (P @ CV).astype(np.float32)
+            self.gizmo_prog["u_mvp"].write(MVPc.tobytes())
+            self.gizmo_prog["u_color"].value = (0.15, 0.85, 1.0, 1.0)
+            self.curve_vao.render(mode=moderngl.LINE_STRIP, vertices=self._curve_count)
+            self.gizmo_prog["u_color"].value = (0.95, 0.95, 0.95, 1.0)
+            self.curve_pts_vao.render(mode=moderngl.POINTS, vertices=self._curve_pts_count)
+            self.gizmo_prog["u_color"].value = (1.0, 0.3, 0.3, 1.0)
+            self.curve_gizmo_vao.render(mode=moderngl.LINES)
 
         self.ctx.disable(moderngl.DEPTH_TEST)
 
