@@ -232,16 +232,21 @@ class OfflineMPR:
 
 # ---------- synthetic input generator ----------
 def generate_timeline(seconds, fps, seed):
+    """
+    Very slow, mostly imperceptible Brownian-like motion suitable for long renders.
+    Over long durations (e.g. 1 hour) the center performs a slow wander that can
+    eventually traverse most of the volume while keeping frame-to-frame change tiny.
+    """
     rng = np.random.default_rng(seed)
     frames = int(round(seconds * fps))
+    dt = 1.0 / max(float(fps), 1.0)
 
-    # Start state (matches your defaults) :contentReference[oaicite:5]{index=5}
+    # Start state
     state = {
         "center": np.array([0.5, 0.5, 0.5], dtype=np.float32),
         "yaw": 0.0,
         "pitch": 0.0,
         "scale": 0.55,
-
         "heap_enable": 1,
         "mouse_uv": np.array([0.5, 0.5], dtype=np.float32),
         "radius": 0.18,
@@ -249,76 +254,95 @@ def generate_timeline(seconds, fps, seed):
         "stretch": 1.0,
         "depth": 0.22,
         "dir": -1.0,
-
         "flip_y": 1,
         "bgr_input": 1,
     }
 
-    # Random-walk velocities
+    # Target traversal in normalized units for the full clip; scales by duration.
+    travel_ratio = float(np.clip(seconds / 3600.0, 0.05, 1.0))
+    max_center_speed = (0.55 * travel_ratio) / max(seconds, 1.0)
+    max_mouse_speed = (0.40 * travel_ratio) / max(seconds, 1.0)
+
+    # Brownian / OU velocity states (small per-frame deltas)
     v_center = np.zeros(3, dtype=np.float32)
     v_mouse = np.zeros(2, dtype=np.float32)
     v_yaw = 0.0
     v_pitch = 0.0
+    v_depth = 0.0
 
     events = []
     per_frame = []
 
-    def clamp01(x): return np.clip(x, 0.0, 1.0)
+    def clamp01(x):
+        return np.clip(x, 0.0, 1.0)
 
     for f in range(frames):
         t = f / max(frames - 1, 1)
 
-        # --- random "key presses" (sparse) ---
-        # toggle heap
-        if rng.random() < 0.01:
-            state["heap_enable"] = 0 if state["heap_enable"] else 1
-            events.append({"frame": f, "type": "toggle_heap", "value": state["heap_enable"]})
-        # flip direction
-        if rng.random() < 0.008:
+        # Tiny, sparse toggles for subtle non-static behavior.
+        if rng.random() < 0.00035:
             state["dir"] *= -1.0
             events.append({"frame": f, "type": "flip_dir", "value": state["dir"]})
-        # adjust depth/radius sometimes
-        if rng.random() < 0.01:
-            delta = float(rng.normal(0.0, 0.03))
-            state["depth"] = float(np.clip(state["depth"] + delta, 0.0, 0.95))
-            events.append({"frame": f, "type": "depth", "value": state["depth"]})
-        if rng.random() < 0.01:
-            delta = float(rng.normal(0.0, 0.02))
-            state["radius"] = float(np.clip(state["radius"] + delta, 0.03, 0.90))
-            # keep softness <= radius
-            state["softness"] = float(np.clip(state["softness"], 0.0, state["radius"] * 0.9))
-            events.append({"frame": f, "type": "radius", "value": state["radius"]})
-        if rng.random() < 0.01:
-            delta = float(rng.normal(0.0, 0.01))
-            state["softness"] = float(np.clip(state["softness"] + delta, 0.0, state["radius"] * 0.9))
-            events.append({"frame": f, "type": "softness", "value": state["softness"]})
-        if rng.random() < 0.006:
-            delta = float(rng.normal(0.0, 0.4))
-            state["stretch"] = float(np.clip(state["stretch"] + delta, 0.1, 10.0))
-            events.append({"frame": f, "type": "stretch", "value": state["stretch"]})
+        if rng.random() < 0.00025:
+            state["heap_enable"] = 0 if state["heap_enable"] else 1
+            events.append({"frame": f, "type": "toggle_heap", "value": state["heap_enable"]})
 
-        # --- random-walk mouse inside UV box ---
-        v_mouse += rng.normal(0.0, 0.06, size=2).astype(np.float32) * (1.0 / fps)
-        v_mouse *= 0.92
-        state["mouse_uv"] = clamp01(state["mouse_uv"] + v_mouse)
-
-        # --- random-walk center inside volume box ---
-        v_center += rng.normal(0.0, 0.08, size=3).astype(np.float32) * (1.0 / fps)
-        v_center *= 0.90
+        # Slow center wander (Brownian + weak deterministic drift to cover volume).
+        drift = np.array([
+            math.sin(2.0 * math.pi * (0.07 * t + 0.11)),
+            math.sin(2.0 * math.pi * (0.05 * t + 0.41)),
+            math.sin(2.0 * math.pi * (0.09 * t + 0.73)),
+        ], dtype=np.float32) * (max_center_speed * 0.22)
+        v_center = v_center * 0.997 + rng.normal(0.0, max_center_speed * 0.22, size=3).astype(np.float32) + drift
+        speed = float(np.linalg.norm(v_center))
+        if speed > max_center_speed:
+            v_center *= (max_center_speed / max(speed, 1e-8))
         state["center"] = clamp01(state["center"] + v_center)
 
-        # --- yaw/pitch ---
-        v_yaw += float(rng.normal(0.0, 0.9)) * (1.0 / fps)
-        v_pitch += float(rng.normal(0.0, 0.8)) * (1.0 / fps)
-        v_yaw *= 0.93
-        v_pitch *= 0.93
+        # Slow mouse drift in UV with Brownian motion.
+        mouse_drift = np.array([
+            math.cos(2.0 * math.pi * (0.11 * t + 0.19)),
+            math.sin(2.0 * math.pi * (0.08 * t + 0.62)),
+        ], dtype=np.float32) * (max_mouse_speed * 0.28)
+        v_mouse = v_mouse * 0.996 + rng.normal(0.0, max_mouse_speed * 0.25, size=2).astype(np.float32) + mouse_drift
+        ms = float(np.linalg.norm(v_mouse))
+        if ms > max_mouse_speed:
+            v_mouse *= (max_mouse_speed / max(ms, 1e-8))
+        state["mouse_uv"] = clamp01(state["mouse_uv"] + v_mouse)
+
+        # Very slow axis rotation (yaw/pitch) with Brownian perturbation.
+        v_yaw = (v_yaw * 0.9985) + (0.030 * math.sin(2.0 * math.pi * (0.016 * t + 0.30)) + rng.normal(0.0, 0.0012)) * dt
+        v_pitch = (v_pitch * 0.9985) + (0.024 * math.cos(2.0 * math.pi * (0.013 * t + 0.57)) + rng.normal(0.0, 0.0010)) * dt
         state["yaw"] += v_yaw
         state["pitch"] = float(np.clip(state["pitch"] + v_pitch, -1.45, 1.45))
 
-        # --- scale gentle modulation ---
-        state["scale"] = float(np.clip(0.55 + 0.10 * math.sin(2 * math.pi * (t * 1.0 + 0.13)), 0.05, 2.0))
+        # Heap depth/radius/softness/stretch: ultra-slow modulation + noise.
+        v_depth = (v_depth * 0.996) + (0.060 * math.sin(2.0 * math.pi * (0.022 * t + 0.17)) + rng.normal(0.0, 0.0015)) * dt
+        state["depth"] = float(np.clip(state["depth"] + v_depth, 0.03, 0.94))
 
-        # snapshot (json-serializable)
+        state["radius"] = float(np.clip(
+            0.16 + 0.05 * (0.5 + 0.5 * math.sin(2.0 * math.pi * (0.019 * t + 0.12))) + rng.normal(0.0, 0.0008),
+            0.03,
+            0.90,
+        ))
+        state["softness"] = float(np.clip(
+            0.030 + 0.018 * (0.5 + 0.5 * math.cos(2.0 * math.pi * (0.015 * t + 0.44))) + rng.normal(0.0, 0.0006),
+            0.0,
+            state["radius"] * 0.9,
+        ))
+        state["stretch"] = float(np.clip(
+            0.9 + 0.7 * (0.5 + 0.5 * math.sin(2.0 * math.pi * (0.011 * t + 0.81))) + rng.normal(0.0, 0.004),
+            0.1,
+            10.0,
+        ))
+
+        # Tiny scale breathing for life without obvious pulses.
+        state["scale"] = float(np.clip(
+            0.55 + 0.018 * math.sin(2.0 * math.pi * (0.020 * t + 0.13)) + rng.normal(0.0, 0.0007),
+            0.05,
+            2.0,
+        ))
+
         per_frame.append({
             "frame": f,
             "center": [float(x) for x in state["center"]],
