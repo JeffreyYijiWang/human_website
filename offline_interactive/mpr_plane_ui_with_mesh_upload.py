@@ -858,6 +858,7 @@ class MPRPlaneUI(mglw.WindowConfig):
             p[:] = np.clip(p, -0.5, 0.5)
             self.curve_points[self.curve_selected_idx] = p
             self._update_curve_geometry()
+            self._request_mpr_screen_update()
             return
 
         if self.view_mode == "slice":
@@ -945,6 +946,7 @@ class MPRPlaneUI(mglw.WindowConfig):
                 types = ["cubic", "quadratic", "poly"]
                 self.curve_type = types[(types.index(self.curve_type) + 1) % len(types)]
                 self._update_curve_geometry()
+                self._request_mpr_screen_update()
                 print(f"curve_type={self.curve_type}")
                 return
             if key == k.P:
@@ -952,6 +954,7 @@ class MPRPlaneUI(mglw.WindowConfig):
                 self.curve_points.append((last + np.array([0.1, 0.0, 0.05], dtype=np.float32)).astype(np.float32))
                 self.curve_selected_idx = len(self.curve_points)-1
                 self._update_curve_geometry()
+                self._request_mpr_screen_update()
                 return
             if key == k.X:
                 self.curve_drag_axis = "x"
@@ -1186,6 +1189,14 @@ class MPRPlaneUI(mglw.WindowConfig):
             self.curve_gizmo_vao.render(mode=moderngl.LINES)
 
         self.ctx.disable(moderngl.DEPTH_TEST)
+
+    def _request_mpr_screen_update(self):
+        """Screen refresh hook for curve editor updates.
+
+        Keep behavior aligned with deployed UI: any curve panel edit should
+        request a visible MPR-plane redraw on the next frame.
+        """
+        self.window.invalid = True
 
     def _render_curve_panel(self):
         if not (self.curve_edit_mode or self.graph_ui_mode):
